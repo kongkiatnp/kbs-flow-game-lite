@@ -1,0 +1,90 @@
+name: ALT-13 Production Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Runtime identity
+        run: |
+          echo "NODE=$(node -v)" | tee qa/ALT13_GITHUB_RUNTIME.txt
+          echo "NPM=$(npm -v)" | tee -a qa/ALT13_GITHUB_RUNTIME.txt
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: Validate dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+
+          if grep -q '/src/main.tsx' dist/index.html; then
+            echo 'DIST_SOURCE_ENTRY_LEAK=FAIL'
+            exit 1
+          fi
+
+          test "$(find dist -type f | wc -l)" -gt 1
+
+          {
+            echo 'ALT13_GITHUB_INSTALL=PASS'
+            echo 'ALT13_GITHUB_TESTS=PASS'
+            echo 'ALT13_GITHUB_BUILD=PASS'
+            echo 'ALT13_DIST_INDEX=PASS'
+            echo 'ALT13_DIST_SOURCE_ENTRY_LEAK=PASS'
+            echo "ALT13_DIST_FILE_COUNT=$(find dist -type f | wc -l | tr -d ' ')"
+            echo "ALT13_DIST_BYTES=$(du -sb dist | awk '{print $1}')"
+            echo 'ALT13_BUILD_COMPLETE=PASS'
+          } | tee qa/ALT13_GITHUB_BUILD_EVIDENCE.txt
+
+      - name: Dist SHA-256 manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && find . -type f -print0 | sort -z | xargs -0 sha256sum) > qa/ALT13_DIST_MANIFEST.sha256
+
+      - name: Package hosting artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          (cd dist && zip -r ../release/KBS_FLOW_GAME_PRODUCTION_DIST.zip .)
+          sha256sum release/KBS_FLOW_GAME_PRODUCTION_DIST.zip | tee qa/ALT13_RELEASE_SHA256.txt
+
+      - name: Upload production dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: KBS_FLOW_GAME_PRODUCTION_DIST
+          path: |
+            dist/**
+            qa/ALT13_GITHUB_RUNTIME.txt
+            qa/ALT13_GITHUB_BUILD_EVIDENCE.txt
+            qa/ALT13_DIST_MANIFEST.sha256
+            qa/ALT13_RELEASE_SHA256.txt
+            release/KBS_FLOW_GAME_PRODUCTION_DIST.zip
+          if-no-files-found: error
+          retention-days: 30
